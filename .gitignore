@@ -1,0 +1,18 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.idea/
+.vscode/
+results/*.csv
+!results/.gitkeep
+*.tmp
+
+# tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.DS_Store

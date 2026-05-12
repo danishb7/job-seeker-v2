@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Job Seeker</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      <div class="brand-text">
+        <h1>Job Seeker</h1>
+        <p class="tagline">A friendly little agent that goes hunting for jobs that fit you.</p>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="btn-search" class="btn btn-primary">Find me jobs</button>
+      <button id="btn-prefs" class="btn btn-secondary">Job Requirements</button>
+      <button id="btn-reload" class="btn btn-ghost">Reload preferences</button>
+      <button id="btn-download" class="btn btn-ghost hidden">Download CSV</button>
+      <button id="btn-history" class="btn btn-ghost hidden">History</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <div id="status-bar" class="status-bar hidden"></div>
+    <div id="loading" class="loading hidden">
+      <div><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+      <p>Searching the web for jobs that fit you... this can take a minute.</p>
+    </div>
+    <div id="empty" class="empty hidden">No matching jobs in this run. Try loosening your preferences or running again.</div>
+
+    <div id="controls" class="controls hidden">
+      <div class="chips">
+        <button class="chip is-active" data-filter="all">All</button>
+        <button class="chip" data-filter="remote">Remote</button>
+        <button class="chip" data-filter="hybrid">Hybrid</button>
+        <button class="chip" data-filter="nonprofit">Non-profit / H1B-exempt</button>
+        <button class="chip" data-filter="hassalary">Has salary</button>
+      </div>
+      <div class="sort">
+        <label for="sort-by">Sort:</label>
+        <select id="sort-by">
+          <option value="best">Best match</option>
+          <option value="newest">Newest first</option>
+          <option value="salary">Salary: high -> low</option>
+        </select>
+      </div>
+    </div>
+    <div id="results" class="results"></div>
+  </main>
+
+  <div id="modal-prefs" class="modal hidden">
+    <div class="modal-backdrop" data-close data-modal="prefs"></div>
+    <div class="modal-card modal-card--prefs">
+      <div class="modal-header">
+        <div>
+          <h2>Job requirements</h2>
+          <p class="muted">Everything here is saved to <code>job_requirements.md</code>. The agent reads the full file on every search—including location and which sites to search.</p>
+        </div>
+        <button class="icon-btn" data-close data-modal="prefs">&times;</button>
+      </div>
+      <div class="prefs-scroll">
+        <div class="prefs-field">
+          <label for="pref-intro">Intro (blockquote under the title)</label>
+          <p class="field-hint">Shown as the grey quote block. Tell yourself how to use this file.</p>
+          <textarea id="pref-intro" class="prefs-input prefs-input--tall" rows="4"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-job_titles">Job titles</label>
+          <p class="field-hint">One role or bullet per line. The agent uses these for search keywords.</p>
+          <textarea id="pref-job_titles" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-location">Location</label>
+          <p class="field-hint">Regions, commute, country rules—this replaces any old &quot;location hint&quot; in config.</p>
+          <textarea id="pref-location" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-search_domains">Search domains</label>
+          <p class="field-hint">Hostnames only (e.g. <code>linkedin.com</code>). Tavily will only return hits from these sites. One per line.</p>
+          <textarea id="pref-search_domains" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-work_mode">Work mode</label>
+          <p class="field-hint">Remote / hybrid / on-site expectations.</p>
+          <textarea id="pref-work_mode" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-salary">Salary</label>
+          <p class="field-hint">Minimum, range, or leave the minimum line blank if you have no floor.</p>
+          <textarea id="pref-salary" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-company_type">Company type</label>
+          <p class="field-hint">Non-profit, industry, size, mission—whatever matters to you.</p>
+          <textarea id="pref-company_type" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-visa_requirements">Visa requirements</label>
+          <p class="field-hint">Sponsorship, cap-exempt, CPT/OPT, etc. The agent must respect this section.</p>
+          <textarea id="pref-visa_requirements" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-must_have">Must-have</label>
+          <p class="field-hint">Hard requirements; the agent will not bend these.</p>
+          <textarea id="pref-must_have" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-nice_to_have">Nice-to-have</label>
+          <p class="field-hint">Bonus points, not deal-breakers.</p>
+          <textarea id="pref-nice_to_have" class="prefs-input"></textarea>
+        </div>
+        <div class="prefs-field">
+          <label for="pref-exclude">Exclude</label>
+          <p class="field-hint">Industries, role types, or red flags to avoid entirely.</p>
+          <textarea id="pref-exclude" class="prefs-input"></textarea>
+        </div>
+        <div id="prefs-extra-wrap" class="prefs-field hidden">
+          <label for="pref-extra">Additional sections</label>
+          <p class="field-hint">Headings in your file that are not in the form above—kept verbatim on save.</p>
+          <textarea id="pref-extra" class="prefs-input"></textarea>
+        </div>
+      </div>
+      <div id="prefs-meta" class="modal-meta muted"></div>
+      <div class="modal-footer">
+        <button id="btn-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="btn-save" class="btn btn-secondary">Save</button>
+        <button id="btn-save-search" class="btn btn-primary">Save &amp; Search</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-history" class="modal hidden">
+    <div class="modal-backdrop" data-close data-modal="history"></div>
+    <div class="modal-card modal-card--history">
+      <div class="modal-header">
+        <div><h2>Past search runs</h2><p class="muted">Each run saves a CSV under results/.</p></div>
+        <button class="icon-btn" data-close data-modal="history">&times;</button>
+      </div>
+      <div class="history-scroll"><ul id="history-list" class="history-list"></ul></div>
+      <div class="modal-footer"><button class="btn btn-ghost" data-close data-modal="history">Close</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <footer class="footer">Model: <code>{{ model }}</code> · Preferences: <code>{{ preferences_path }}</code></footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>
