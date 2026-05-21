@@ -8,17 +8,18 @@ from pathlib import Path
 
 from .config import PREFERENCES_PATH
 
-# Used when ## Search domains is missing or empty (Tavily include_domains).
-DEFAULT_SEARCH_DOMAINS: list[str] = [
-    "linkedin.com",
-    "indeed.com",
-    "idealist.org",
-    "higheredjobs.com",
-]
-
 _SEARCH_DOMAINS_SECTION = re.compile(
     r"(?ms)^##\s+Search domains\s*$(.*?)(?=^##\s|\Z)",
 )
+
+# Whole line is comma/semicolon-separated hostnames only (legacy inline format).
+_DOMAIN_ONLY_LINE = re.compile(
+    r"^\s*(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.)+[a-z]{2,}"
+    r"(?:\s*[,;]+\s*(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.)+[a-z]{2,})*\s*$",
+    re.I,
+)
+
+_UNRESTRICTED_MARKERS = frozenset({"unrestricted", "unlimited", "full web", "all"})
 
 
 def read_preferences(path: Path = PREFERENCES_PATH) -> str:
@@ -32,35 +33,58 @@ def read_for_agent(path: Path = PREFERENCES_PATH) -> str:
     return read_preferences(path)
 
 
-def parse_search_domains(content: str) -> list[str]:
-    """Parse hostnames from the ## Search domains section; bullets or comma-separated."""
+def parse_search_domains(content: str) -> list[str] | None:
+    """Parse Tavily ``include_domains`` from ``## Search domains``.
+
+    Returns ``None`` when no hostname filter should be applied (broad search, closest to
+    OpenAI web_search). Returns a non-empty list when the section lists hostnames.
+
+    Hostnames are taken only from bullet lines (``-`` / ``*``) or from a legacy
+    single line of comma-separated domains—not from free prose (so examples in sentences
+    are not treated as filters).
+    """
     text = content.replace("\r\n", "\n")
     match = _SEARCH_DOMAINS_SECTION.search(text)
     if not match:
-        return list(DEFAULT_SEARCH_DOMAINS)
+        return None
     body = match.group(1).strip()
     if not body:
-        return list(DEFAULT_SEARCH_DOMAINS)
+        return None
+
     found: list[str] = []
-    for raw_line in body.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("- "):
-            line = line[2:].strip()
-        elif line.startswith("* "):
-            line = line[2:].strip()
-        if not line or line.lower().startswith("tavily"):
-            continue
-        for token in re.split(r"[\s,;]+", line):
-            token = token.strip().lower().rstrip("/")
+
+    def _consume_tokens(source: str) -> None:
+        for token in re.split(r"[\s,;]+", source):
+            token = token.strip("`\"'").strip().lower().rstrip("/")
             if not token:
                 continue
             token = re.sub(r"^https?://", "", token)
             token = token.split("/")[0].split(":")[0]
             if "." in token and " " not in token:
                 found.append(token)
-    return found or list(DEFAULT_SEARCH_DOMAINS)
+
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("- ") or line.startswith("* "):
+            rest = line[2:].strip()
+            low = rest.lower()
+            if low in _UNRESTRICTED_MARKERS or low == "*":
+                return None
+            if low.startswith("tavily"):
+                continue
+            _consume_tokens(rest)
+            continue
+
+        if line.lower().startswith("tavily"):
+            continue
+        if not _DOMAIN_ONLY_LINE.match(line):
+            continue
+        _consume_tokens(line)
+
+    return found if found else None
 
 
 def write_preferences(content: str, path: Path = PREFERENCES_PATH) -> None:

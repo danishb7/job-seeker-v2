@@ -21,11 +21,7 @@
 
 ## Search domains
 
-Tavily only returns pages from these hostnames (one domain per line; bullets optional).
-
-- linkedin.com
-- indeed.com
-- google.com
+Broad search is the default (no hostname filter), similar in breadth to the original [job-seeker](https://github.com/danishb7/job-seeker) stack using OpenAI web search. To restrict Tavily to specific boards only, add markdown bullets with hostnames—see the README for examples.
 
 ## Work Mode
 

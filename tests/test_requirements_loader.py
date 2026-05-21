@@ -36,6 +36,29 @@ def test_parse_search_domains_inline():
     assert set(requirements_loader.parse_search_domains(md)) == {"idealist.org", "higheredjobs.com"}
 
 
-def test_parse_search_domains_missing_uses_defaults():
+def test_parse_search_domains_missing_is_unrestricted():
     md = "## Job Titles\n\nEngineer\n"
-    assert requirements_loader.parse_search_domains(md) == list(requirements_loader.DEFAULT_SEARCH_DOMAINS)
+    assert requirements_loader.parse_search_domains(md) is None
+
+
+def test_parse_search_domains_empty_section_is_unrestricted():
+    md = "## Search domains\n\n\n## Job Titles\n\nx\n"
+    assert requirements_loader.parse_search_domains(md) is None
+
+
+def test_parse_search_domains_unrestricted_bullet():
+    md = "## Search domains\n\n- unrestricted\n"
+    assert requirements_loader.parse_search_domains(md) is None
+
+
+def test_parse_search_domains_prose_with_examples_does_not_extract():
+    md = """## Search domains
+
+Add bullets such as linkedin.com only when narrowing; default is open web.
+"""
+    assert requirements_loader.parse_search_domains(md) is None
+
+
+def test_parse_search_domains_single_inline_host():
+    md = "## Search domains\n\nlinkedin.com\n"
+    assert requirements_loader.parse_search_domains(md) == ["linkedin.com"]

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from typing import Any
 
 from google.genai import types
@@ -15,22 +17,51 @@ from .config import (
 from . import gemini_client
 from .search_provider import tavily_search
 
+logger = logging.getLogger(__name__)
+
 # DO NOT EDIT casually: stable prefix helps provider-side prompt caching behavior.
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_BASE = (
     "You find currently-open US job postings matching the user's preferences (Markdown).\n"
     "Rules:\n"
     f"- Call web_search at most {MAX_SEARCH_CALLS} times; combine keywords per query.\n"
+    "- Keep each web_search query SHORT (under 350 characters): job keywords + location + one constraint.\n"
     "- The USER PREFERENCES block is authoritative: follow Location, Search domains, "
     "Visa requirements, Work mode, Salary, Company type, Must-Have, Nice-to-Have, and Exclude exactly.\n"
     "- Honor Must-Have / Exclude strictly.\n"
+    "- If web_search snippets list plausible postings, include them when they fit Must-Have / Exclude. "
+    "Use snippet URLs as posting links when they point at job pages.\n"
     f"- Return up to {MAX_JOBS} matches, best-ranked first. Use null for unknown fields.\n"
     f'- "why_match": one sentence, <= {WHY_MATCH_MAX_CHARS} chars.\n'
-    "- Web search results are already restricted to the hostnames listed under ## Search domains."
+)
+
+
+def _system_instruction(include_domains: list[str] | None) -> str:
+    if include_domains:
+        suffix = (
+            "- Web search results are limited to these hostnames (from ## Search domains): "
+            + ", ".join(include_domains)
+            + "."
+        )
+    else:
+        suffix = (
+            "- Web search is not limited to specific sites (no hostname filter). Prefer reputable job boards "
+            "and employer career sites when choosing URLs."
+        )
+    return _SYSTEM_PROMPT_BASE + suffix
+
+_FALLBACK_NUDGE = (
+    "Produce the final answer now as JSON only. "
+    'Use the web_search snippets above; each job must include "title", "company", and "url" from those results '
+    "when possible. If no snippet plausibly matches Must-Have and Exclude, return {\"jobs\": []}."
 )
 
 _WEB_SEARCH_DECLARATION = types.FunctionDeclaration(
     name="web_search",
-    description="Search the live web for job postings (results are limited to domains in user preferences).",
+    description=(
+        "Search the live web for job postings via Tavily. "
+        "If USER PREFERENCES list hostnames under ## Search domains, results are filtered to those sites; "
+        "otherwise search is unrestricted."
+    ),
     parameters_json_schema={
         "type": "object",
         "properties": {"query": {"type": "string"}},
@@ -57,7 +88,7 @@ JOB_JSON_SCHEMA: dict[str, Any] = {
                     "work_mode": {"type": "string"},
                     "salary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "is_nonprofit_or_h1b_cap_exempt": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
-                    "why_match": {"type": "string", "maxLength": WHY_MATCH_MAX_CHARS},
+                    "why_match": {"type": "string"},
                     "posted": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "url": {"type": "string"},
                     "source": {"type": "string"},
@@ -97,18 +128,18 @@ def _normalise_jobs(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return cleaned
 
 
-def _tool_phase_config() -> types.GenerateContentConfig:
+def _tool_phase_config(include_domains: list[str] | None) -> types.GenerateContentConfig:
     return types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=_system_instruction(include_domains),
         tools=[_TOOL],
         max_output_tokens=MAX_OUTPUT_TOKENS,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
 
-def _final_phase_config() -> types.GenerateContentConfig:
+def _final_phase_config(include_domains: list[str] | None) -> types.GenerateContentConfig:
     return types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=_system_instruction(include_domains),
         max_output_tokens=MAX_OUTPUT_TOKENS,
         response_mime_type="application/json",
         response_json_schema=JOB_JSON_SCHEMA,
@@ -116,20 +147,74 @@ def _final_phase_config() -> types.GenerateContentConfig:
     )
 
 
+def _final_fallback_config(include_domains: list[str] | None) -> types.GenerateContentConfig:
+    """Looser JSON mode when strict schema parse fails (no json_schema — MIME JSON only)."""
+    return types.GenerateContentConfig(
+        system_instruction=_system_instruction(include_domains),
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        response_mime_type="application/json",
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if fence:
+        raw = fence.group(1).strip()
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(raw)):
+        if raw[i] == "{":
+            depth += 1
+        elif raw[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(raw[start : i + 1])
+                    return obj if isinstance(obj, dict) else None
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 def _parse_job_payload(resp: Any) -> dict[str, Any] | None:
     parsed = getattr(resp, "parsed", None)
     if isinstance(parsed, dict):
         return parsed
     text = getattr(resp, "text", None) or ""
-    if not text.strip():
-        return None
+    extracted = _extract_json_object(text)
+    if extracted is not None:
+        return extracted
+    return None
+
+
+def _log_response_issue(where: str, resp: Any) -> None:
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
+        pf = getattr(resp, "prompt_feedback", None)
+        if pf is not None:
+            logger.warning("%s prompt_feedback=%s", where, pf)
+        cands = getattr(resp, "candidates", None) or []
+        if not cands:
+            logger.warning("%s no candidates", where)
+            return
+        fr = getattr(cands[0], "finish_reason", None)
+        if fr is not None:
+            logger.warning("%s finish_reason=%s", where, fr)
+    except Exception:
+        logger.warning("%s could not inspect response", where)
 
 
-def search_jobs(prefs_md_for_agent: str, include_domains: list[str]) -> list[dict[str, Any]]:
+def search_jobs(prefs_md_for_agent: str, include_domains: list[str] | None) -> list[dict[str, Any]]:
     contents: list[types.Content] = [
         types.Content(
             role="user",
@@ -138,13 +223,29 @@ def search_jobs(prefs_md_for_agent: str, include_domains: list[str]) -> list[dic
     ]
     searches_used = 0
     nudged_without_tools = False
+    tool_empty_retries = 0
 
-    for _ in range(MAX_SEARCH_CALLS + 3):
+    for _ in range(MAX_SEARCH_CALLS + 5):
         if searches_used >= MAX_SEARCH_CALLS:
             break
-        resp = gemini_client.generate_content(contents=contents, config=_tool_phase_config())
+        resp = gemini_client.generate_content(contents=contents, config=_tool_phase_config(include_domains))
         if not resp.candidates or not resp.candidates[0].content:
-            break
+            _log_response_issue("tool_phase", resp)
+            if tool_empty_retries >= 1:
+                break
+            tool_empty_retries += 1
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(
+                            text="Your previous reply had no usable content. "
+                            "Call web_search once with one short query string for job postings."
+                        )
+                    ],
+                )
+            )
+            continue
         calls = resp.function_calls
         if calls:
             contents.append(resp.candidates[0].content)
@@ -184,8 +285,16 @@ def search_jobs(prefs_md_for_agent: str, include_domains: list[str]) -> list[dic
             continue
         break
 
-    final = gemini_client.generate_content(contents=contents, config=_final_phase_config())
+    final = gemini_client.generate_content(contents=contents, config=_final_phase_config(include_domains))
     payload = _parse_job_payload(final)
+    if payload is None:
+        _log_response_issue("final_strict", final)
+        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=_FALLBACK_NUDGE)]))
+        final = gemini_client.generate_content(contents=contents, config=_final_fallback_config(include_domains))
+        payload = _parse_job_payload(final)
+        if payload is None:
+            _log_response_issue("final_fallback", final)
+
     if not payload:
         return []
     return _normalise_jobs(payload)
