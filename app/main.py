@@ -73,11 +73,15 @@ def get_results() -> dict[str, object]:
 
 @app.get("/api/results/{filename}")
 def download_result(filename: str):
+    if not filename or filename != Path(filename).name:
+        raise HTTPException(status_code=400, detail="Invalid path.")
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid path.")
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
     candidate = (RESULTS_DIR / filename).resolve()
     results_root = RESULTS_DIR.resolve()
-    if candidate.suffix.lower() != ".csv":
-        raise HTTPException(status_code=400, detail="Only CSV files are allowed.")
-    if not str(candidate).startswith(str(results_root)):
+    if candidate != results_root and results_root not in candidate.parents:
         raise HTTPException(status_code=400, detail="Invalid path.")
     if not candidate.exists() or not candidate.is_file():
         raise HTTPException(status_code=404, detail="File not found.")

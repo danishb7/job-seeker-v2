@@ -7,7 +7,7 @@ A small FastAPI web app that finds U.S. job postings from your Markdown preferen
 This repository mirrors the **same idea and UX** as [danishb7/job-seeker](https://github.com/danishb7/job-seeker): one `job_requirements.md` file, **Find me jobs**, CSV history, filters, and the preferences modal. The difference is the backend:
 
 - **LLM**: **Google Gemini** via [Google AI Studio](https://aistudio.google.com/apikey), which provides a **free API key tier within usage quotas** (see [Gemini pricing](https://ai.google.dev/pricing)) instead of the original OpenAI-based stack.
-- **Web search**: **Tavily** (optional free tier ~1000 searches/month) instead of the built-in provider web search tool.
+- **Web search**: **Tavily** (optional free tier ~1000 searches/month) instead of the built-in provider web search tool. By default, searches are **not** limited to a fixed list of hostnames (same spirit as broad OpenAI `web_search`). List domains under `## Search domains` only when you want to **narrow** Tavily.
 - **Token-focused behavior**: capped web searches per run (`MAX_SEARCH_CALLS`), structured JSON for the final job list (schema enforced, not long prose), concise system instructions, **full preferences read verbatim from Markdown** (including location and search domains in the file—not duplicated in `.env`), and Tavily queries trimmed to the API **400-character** limit so requests do not fail.
 
 If you want the original OpenAI-oriented implementation, use the [job-seeker](https://github.com/danishb7/job-seeker) repo.
@@ -15,7 +15,7 @@ If you want the original OpenAI-oriented implementation, use the [job-seeker](ht
 ---
 
 - One editable file ([`job_requirements.md`](job_requirements.md)) drives every search.
-- Click **Find me jobs** to run the agent across the domains you list under `## Search domains`.
+- Click **Find me jobs** to run the agent; optionally narrow Tavily to hostnames you list under `## Search domains`.
 - Every run is auto-saved as a CSV in `results/`.
 
 ## Setup
@@ -35,7 +35,7 @@ If you want the original OpenAI-oriented implementation, use the [job-seeker](ht
    - **Gemini**: create a key in [Google AI Studio](https://aistudio.google.com/apikey) (Google account).
    - **Tavily**: sign up at [tavily.com](https://tavily.com).
 4. Copy `.env.example` to `.env` and set `GEMINI_API_KEY`, `TAVILY_API_KEY`, and optionally `GEMINI_MODEL` (default is `gemini-2.5-flash` in [`app/config.py`](app/config.py)).
-5. Edit [`job_requirements.md`](job_requirements.md) (or use **Job requirements** in the app). Put **location**, **visa rules**, and **which sites to search** in that file—especially the `## Search domains` section, which limits Tavily to the hostnames you list.
+5. Edit [`job_requirements.md`](job_requirements.md) (or use **Job requirements** in the app). Put **location**, **visa rules**, and optional **site narrowing** in that file. The `## Search domains` section limits Tavily **only when** you add hostname bullets; leave it as prose-only or empty for web-wide search.
 6. Run the app:
    - Windows (double-click): `run.bat`
    - macOS (double-click after first `chmod +x run.command`): `run.command`
@@ -68,6 +68,13 @@ Each run writes `results/jobs_YYYYMMDD_HHMMSS.csv` with columns:
 
 - **Tavily**: free tier is on the order of ~1000 searches per month; this app uses at most **2** Tavily calls per run (`MAX_SEARCH_CALLS`), so budget roughly **~500 runs/month** on a 1000/month quota.
 - **Gemini**: Google AI Studio offers **free usage within quotas**; limits and eligible models change over time. See [Gemini pricing and rate limits](https://ai.google.dev/pricing). The app retries once on transient API errors.
+
+## Troubleshooting (zero jobs)
+
+- **`## Search domains`**: Default is **no** hostname filter (broad Tavily search). Add bullets such as `linkedin.com`, `indeed.com`, `idealist.org`, or `higheredjobs.com` **only** if you want to narrow results; listing **`google.com`** rarely surfaces direct job URLs.
+- **Must-Have / visa rules**: Very narrow criteria (e.g. cap-exempt only) plus niche titles often produce **no matching postings** in two searches—that is expected until you broaden titles, location, or relax Exclude.
+- **API**: Confirm `GEMINI_API_KEY` and `TAVILY_API_KEY` in `.env`. Tavily returns nothing if the key is missing or over quota.
+- **Logs**: If you run with `uvicorn`/`python` directly, set logging to `INFO` to see Gemini block reasons (the agent logs when a response has no candidates).
 
 ## Tests
 
